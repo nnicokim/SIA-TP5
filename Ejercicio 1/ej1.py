@@ -1,159 +1,55 @@
 import os
 import sys
 import warnings
+import itertools
+import numpy as np
 
-# ==========================================
-# 0. DESACTIVACIÓN DE WARNINGS DE TENSORFLOW
-# ==========================================
+# Configuración inicial y silenciamiento de TF
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings('ignore', category=UserWarning)
 
-import json
-import re
-import numpy as np
-import matplotlib.pyplot as plt
-import itertools
-from dotenv import load_dotenv
-
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras.optimizers import Adam
 
-# ==========================================
-# 1. CARGA DE CONFIGURACIÓN (.env) Y DATOS
-# ==========================================
-load_dotenv()
+# Importación de nuestros propios módulos
+from config import load_config
+from data_loader import cargar_datos_font
+from models import build_autoencoder
+from utils import ProgressCallback
+import visualization as vis
 
-try:
-    latent_dims = json.loads(os.getenv("LATENT_DIMS", "[2, 3, 4]"))
-    arch_configs = json.loads(os.getenv("ARCH_CONFIGS", "[[32, 16]]"))
-    lr_configs = json.loads(os.getenv("LR_CONFIGS", "[0.001]"))
-    epochs_configs = json.loads(os.getenv("EPOCHS_CONFIGS", "[1000]"))
-    batch_size = int(os.getenv("BATCH_SIZE", "32"))
-except Exception as e:
-    print(f"Error leyendo .env, usando valores de respaldo. Detalles: {e}")
-    latent_dims = [2, 3, 4]
-    arch_configs = [[16, 8], [32, 16], [64, 32], [32, 16, 8], [64, 32, 16]]
-    lr_configs = [0.1, 0.01, 0.001, 0.0005]
-    epochs_configs = [500, 1000, 1500, 2000]
-    batch_size = 32
-
-def cargar_datos_font(filepath="font.h"):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"No se encontró el archivo '{filepath}'.")
-    with open(filepath, 'r') as file:
-        contenido = file.read()
-    
-    contenido = re.sub(r'//.*?\n|/\*.*?\*/', '', contenido, flags=re.S)
-    hex_valores = re.findall(r'0x[0-9a-fA-F]+', contenido)
-    
-    if len(hex_valores) != 224:
-        raise ValueError(f"Se esperaban 224 valores hex, se encontraron {len(hex_valores)}.")
-    
-    datos_binarios = []
-    for hv in hex_valores:
-        bits_str = format(int(hv, 16), '05b')
-        datos_binarios.extend([int(b) for b in bits_str])
-        
-    return np.array(datos_binarios, dtype='float32').reshape(32, 35)
-
+# 1. Carga de datos y variables
+latent_dims, arch_configs, lr_configs, epochs_configs, batch_size = load_config()
 X_train = cargar_datos_font("font.h")
-input_dim = 35 
+input_dim = X_train.shape[1]
 
-# ==========================================
-# 2. FUNCIÓN CONSTRUCTORA DINÁMICA
-# ==========================================
-def build_autoencoder(hidden_layers, latent_dim, learning_rate=0.001):
-    inputs = Input(shape=(input_dim,))
-    x = inputs
-    for units in hidden_layers:
-        x = Dense(units, activation='relu')(x)
-    latent_space = Dense(latent_dim, activation='linear', name="latent_space")(x)
-    
-    x = latent_space
-    for units in reversed(hidden_layers):
-        x = Dense(units, activation='relu')(x)
-    outputs = Dense(input_dim, activation='sigmoid')(x)
-    
-    autoencoder = Model(inputs, outputs)
-    encoder = Model(inputs, latent_space)
-    
-    decoder_input = Input(shape=(latent_dim,))
-    x_dec = decoder_input
-    for i in range(len(hidden_layers) + 1):
-        x_dec = autoencoder.layers[-(len(hidden_layers) + 1) + i](x_dec)
-    decoder = Model(decoder_input, x_dec)
-    
-    autoencoder.compile(optimizer=Adam(learning_rate=learning_rate), loss='mse')
-    return autoencoder, encoder, decoder
-
-# ==========================================
-# 3. ANIMACIÓN DE PROGRESO (CALLBACK)
-# ==========================================
-class ProgressCallback(tf.keras.callbacks.Callback):
-    """
-    Se enchufa a Keras para mostrar una animación y las épocas 
-    en tiempo real sin inundar la consola de texto.
-    """
-    def __init__(self, current_step, total_steps, info_str, total_epochs):
-        super().__init__()
-        self.current_step = current_step
-        self.total_steps = total_steps
-        self.info_str = info_str
-        self.total_epochs = total_epochs
-        # Ruedita de carga estilo Braille
-        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']) 
-
-    def on_epoch_end(self, epoch, logs=None):
-        # Actualizamos la consola cada 15 épocas para que el giro sea fluido
-        if epoch % 15 == 0 or epoch == self.total_epochs - 1:
-            spin = next(self.spinner)
-            # Imprime en la misma línea sobrescribiendo la anterior (\r)
-            sys.stdout.write(f"\r {spin} Entrenando [{self.current_step}/{self.total_steps}] -> {self.info_str} | Época: {epoch+1}/{self.total_epochs}   ")
-            sys.stdout.flush()
-
-# ==========================================
-# 4. GRID SEARCH GENERAL CON MONITOREO EFICIENTE
-# ==========================================
+# 2. Inicialización de variables de métricas
 best_loss = float('inf')
 best_params = None
 best_models = None
 best_2d_models = None
 best_2d_loss = float('inf')
-
 history_dict = {}
 registro_metricas = []
-
 total_combinaciones = len(latent_dims) * len(arch_configs) * len(lr_configs) * len(epochs_configs)
-print(f"\n--- Iniciando Grid Search ({total_combinaciones} combinaciones) ---")
 
+# 3. Grid Search Principal
+print(f"\n--- Iniciando Grid Search Clásico ({total_combinaciones} combinaciones) ---")
 contador = 0
+
 for lat_dim, arch, lr, ep in itertools.product(latent_dims, arch_configs, lr_configs, epochs_configs):
     contador += 1
     param_str = f"Dim:{lat_dim} | Arch:{arch} | LR:{lr}"
     
-    ae, enc, dec = build_autoencoder(arch, latent_dim=lat_dim, learning_rate=lr)
-    
-    # Instanciamos nuestra animación para este modelo específico
+    ae, enc, dec = build_autoencoder(input_dim, arch, lat_dim, lr)
     spinner_cb = ProgressCallback(contador, total_combinaciones, param_str, ep)
     
-    # Entrenamos agregando el callback
     history = ae.fit(X_train, X_train, epochs=ep, batch_size=batch_size, verbose=0, callbacks=[spinner_cb])
     final_loss = history.history['loss'][-1]
-    
-    if np.isnan(final_loss):
-        final_loss = 1.0
+    if np.isnan(final_loss): final_loss = 1.0
         
     history_dict[f"{param_str} | Ep:{ep}"] = history.history['loss']
-    registro_metricas.append({
-        'latent_dim': lat_dim,
-        'arch': str(arch),
-        'lr': lr,
-        'epochs': ep,
-        'loss': final_loss
-    })
+    registro_metricas.append({'latent_dim': lat_dim, 'arch': str(arch), 'lr': lr, 'epochs': ep, 'loss': final_loss})
     
     if final_loss < best_loss:
         best_loss = final_loss
@@ -166,149 +62,34 @@ for lat_dim, arch, lr, ep in itertools.product(latent_dims, arch_configs, lr_con
         
     tf.keras.backend.clear_session()
 
-# Limpiar la última línea del spinner al terminar
+# Limpieza visual de terminal
 sys.stdout.write("\r" + " " * 100 + "\r")
 sys.stdout.flush()
 
 print(f"\n--- ¡VALORES ÓPTIMOS ENCONTRADOS! ---")
 print(f"-> Espacio Latente: {best_params['latent_dim']}D")
 print(f"-> Capas Ocultas: {best_params['arch']}")
-print(f"-> Learning Rate: {best_params['lr']}")
-print(f"-> Épocas: {best_params['epochs']}")
-print(f"-> Pérdida Mínima Absoluta (MSE): {best_loss:.5f}\n")
+print(f"-> LR: {best_params['lr']} | Épocas: {best_params['epochs']}")
+print(f"-> Pérdida Mínima (MSE): {best_loss:.5f}\n")
 
-autoencoder_opt, encoder_opt, decoder_opt = best_models
-
-# ==========================================
-# 5. EXPORTACIÓN DE GRÁFICOS
-# ==========================================
+# 4. Generación de Gráficos (Delegados al módulo)
 print("Generando archivos de gráficos...")
-
-# --- Gráfico 1: Curvas de Pérdidas Globales ---
-plt.figure(figsize=(12, 6))
-opt_key = f"Dim:{best_params['latent_dim']} | Arch:{best_params['arch']} | LR:{best_params['lr']} | Ep:{best_params['epochs']}"
-for params, loss_history in history_dict.items():
-    if params == opt_key:
-        plt.plot(loss_history, label="Configuración Óptima", linewidth=3, color='black', zorder=10)
-    else:
-        plt.plot(loss_history, alpha=0.08, linewidth=0.5)
-plt.title("Historial de Pérdidas en el Espacio de Soluciones")
-plt.xlabel("Épocas")
-plt.ylabel("Pérdida (MSE) - Escala Logarítmica")
-plt.yscale('log')
-plt.legend()
-plt.grid(True, alpha=0.2)
-plt.tight_layout()
-plt.savefig("1_comparativa_hiperparametros.png", dpi=300)
-plt.close()
-
-# --- Gráfico 2: Dispersión Espacio Latente 2D ---
+autoencoder_opt, encoder_opt, decoder_opt = best_models
 _, encoder_2d, _ = best_2d_models
-latent_points = encoder_2d.predict(X_train, verbose=0)
-plt.figure(figsize=(8, 6))
-plt.scatter(latent_points[:, 0], latent_points[:, 1], c=range(32), cmap='jet', s=130, edgecolors='black')
-for i in range(32):
-    plt.annotate(str(i), (latent_points[i, 0]+0.04, latent_points[i, 1]+0.04), fontsize=9, weight='bold')
-plt.title("Mapeo de Caracteres en Espacio Latente 2D Reconstruido")
-plt.xlabel("Dimensión Latente 1")
-plt.ylabel("Dimensión Latente 2")
-plt.grid(True, alpha=0.3)
-plt.savefig("2_espacio_latente_2d.png", dpi=300)
-plt.close()
 
-# --- Gráfico 3: Generación Sintética ---
-centro_latente = np.mean(encoder_opt.predict(X_train, verbose=0), axis=0)
-punto_sintetico = centro_latente + np.random.uniform(-1.0, 1.0, size=(best_params['latent_dim'],))
-nueva_letra_raw = decoder_opt.predict(punto_sintetico.reshape(1, best_params['latent_dim']), verbose=0)
-nueva_letra_img = np.round(nueva_letra_raw).reshape(7, 5)
-plt.figure(figsize=(3, 4))
-plt.imshow(nueva_letra_img, cmap='gray_r')
-plt.title("Nueva Letra Inventada")
-plt.axis('off')
-plt.savefig("3_nueva_letra_generada.png", dpi=300)
-plt.close()
+vis.plot_loss_history(history_dict, best_params)
+vis.plot_latent_space_2d(encoder_2d, X_train)
+vis.plot_synthetic_generation(encoder_opt, decoder_opt, X_train, best_params['latent_dim'])
 
-# --- Gráfico 4: Denoising Autoencoder ---
-dae, _, _ = build_autoencoder(best_params['arch'], latent_dim=best_params['latent_dim'], learning_rate=best_params['lr'])
+# Para Denoising, entrenamos un modelo específico con el setup óptimo y ruido aplicado
+dae, _, _ = build_autoencoder(input_dim, best_params['arch'], best_params['latent_dim'], best_params['lr'])
 X_train_ruido = np.copy(X_train)
 mascara = np.random.rand(*X_train.shape) < 0.15
 X_train_ruido[mascara] = 1 - X_train_ruido[mascara]
 dae.fit(X_train_ruido, X_train, epochs=best_params['epochs'], batch_size=batch_size, verbose=0)
+vis.plot_denoising(dae, X_train)
 
-niveles_ruido = [0.10, 0.25, 0.50]
-fig, axes = plt.subplots(len(niveles_ruido), 3, figsize=(9, 9))
-for idx, p in enumerate(niveles_ruido):
-    ent_r = np.copy(X_train[1:2])
-    masc_r = np.random.rand(*ent_r.shape) < p
-    ent_r[masc_r] = 1 - ent_r[masc_r]
-    pred = np.round(dae.predict(ent_r, verbose=0))
-    axes[idx, 0].imshow(X_train[1].reshape(7, 5), cmap='gray_r')
-    axes[idx, 0].set_title("Original")
-    axes[idx, 0].axis('off')
-    axes[idx, 1].imshow(ent_r.reshape(7, 5), cmap='gray_r')
-    axes[idx, 1].set_title(f"Ruido: {int(p*100)}%")
-    axes[idx, 1].axis('off')
-    axes[idx, 2].imshow(pred.reshape(7, 5), cmap='gray_r')
-    axes[idx, 2].set_title("Reconstruido")
-    axes[idx, 2].axis('off')
-plt.tight_layout()
-plt.savefig("4_resultado_denoising.png", dpi=300)
-plt.close()
+# Gráficos comparativos independientes
+vis.plot_comparative_metrics(registro_metricas)
 
-# ==========================================
-# 6. GRÁFICOS COMPARATIVOS INDEPENDIENTES
-# ==========================================
-
-# --- Gráfico 5: Comparativa de ÉPOCAS ---
-plt.figure(figsize=(8, 5))
-eps_eje = sorted(list(set([r['epochs'] for r in registro_metricas])))
-min_loss_ep = [min([r['loss'] for r in registro_metricas if r['epochs'] == e]) for e in eps_eje]
-plt.plot([str(e) for e in eps_eje], min_loss_ep, marker='s', linewidth=2.5, color='forestgreen', markersize=8)
-plt.title("Impacto de la Cantidad de Épocas en el Límite de Error", weight='bold')
-plt.xlabel("Épocas de Entrenamiento")
-plt.ylabel("Mínimo MSE Alcanzado")
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig("5_comparativa_epochs.png", dpi=300)
-plt.close()
-
-# --- Gráfico 6: Comparativa de LEARNING RATES ---
-plt.figure(figsize=(8, 5))
-lrs_eje = sorted(list(set([r['lr'] for r in registro_metricas])))
-min_loss_lr = [min([r['loss'] for r in registro_metricas if r['lr'] == l]) for l in lrs_eje]
-plt.plot([str(l) for l in lrs_eje], min_loss_lr, marker='o', linewidth=2.5, color='crimson', markersize=8)
-plt.title("Impacto de la Tasa de Aprendizaje (LR) en la Estabilidad", weight='bold')
-plt.xlabel("Learning Rate Evaluados")
-plt.ylabel("Mínimo MSE Alcanzado")
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig("6_comparativa_lr.png", dpi=300)
-plt.close()
-
-# --- Gráfico 7: Comparativa de ARQUITECTURAS ---
-plt.figure(figsize=(9, 5))
-archs_eje = sorted(list(set([r['arch'] for r in registro_metricas])))
-min_loss_arch = [min([r['loss'] for r in registro_metricas if r['arch'] == a]) for a in archs_eje]
-plt.barh(archs_eje, min_loss_arch, color='darkorchid', edgecolor='black', height=0.5)
-plt.title("Impacto de la Capacidad de las Capas Ocultas", weight='bold')
-plt.xlabel("Mínimo MSE Alcanzado")
-plt.ylabel("Topología de Capas (Encoder)")
-plt.grid(True, alpha=0.3, axis='x')
-plt.tight_layout()
-plt.savefig("7_comparativa_architectures.png", dpi=300)
-plt.close()
-
-# --- Gráfico 8: Comparativa de ESPACIOS LATENTES ---
-plt.figure(figsize=(7, 5))
-dims_eje = sorted(list(set([r['latent_dim'] for r in registro_metricas])))
-min_loss_dim = [min([r['loss'] for r in registro_metricas if r['latent_dim'] == d]) for d in dims_eje]
-plt.bar([f"{d}D" for d in dims_eje], min_loss_dim, color='dodgerblue', edgecolor='black', width=0.4)
-plt.title("Impacto del Tamaño del Bottleneck (Espacio Latente)", weight='bold')
-plt.xlabel("Dimensiones del Espacio Latente")
-plt.ylabel("Mínimo MSE Alcanzado")
-plt.grid(True, alpha=0.3, axis='y')
-plt.tight_layout()
-plt.savefig("8_comparativa_latent_dims.png", dpi=300)
-plt.close()
-
-print("¡Ejecución 100% terminada! Revisá tu directorio para ver los 8 gráficos limpios.")
+print("¡Ejecución modular terminada! Revisá tu directorio para ver los 8 gráficos.")
