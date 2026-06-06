@@ -33,9 +33,11 @@ class VAE(Model):
                 tf.keras.losses.binary_crossentropy(data, reconstruction)
             )
             
+            
             # Loss 2: Divergencia KL
             kl_loss = -0.5 * tf.reduce_sum(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
-            total_loss = reconstruction_loss + kl_loss
+            
+            total_loss = reconstruction_loss + (0.01 * kl_loss)
             
         grads = tape.gradient(total_loss, self.trainable_weights)
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
