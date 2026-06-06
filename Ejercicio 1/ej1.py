@@ -5,7 +5,6 @@ import warnings
 # ==========================================
 # 0. DESACTIVACIÓN DE WARNINGS DE TENSORFLOW
 # ==========================================
-# Silencia avisos INFO/WARNING de C++ y optimizaciones de CPU (oneDNN)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -17,7 +16,6 @@ import matplotlib.pyplot as plt
 import itertools
 from dotenv import load_dotenv
 
-# Importamos TensorFlow de forma limpia
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense
@@ -48,7 +46,6 @@ def cargar_datos_font(filepath="font.h"):
     with open(filepath, 'r') as file:
         contenido = file.read()
     
-    # Limpiamos comentarios de C
     contenido = re.sub(r'//.*?\n|/\*.*?\*/', '', contenido, flags=re.S)
     hex_valores = re.findall(r'0x[0-9a-fA-F]+', contenido)
     
@@ -69,14 +66,12 @@ input_dim = 35
 # 2. FUNCIÓN CONSTRUCTORA DINÁMICA
 # ==========================================
 def build_autoencoder(hidden_layers, latent_dim, learning_rate=0.001):
-    # Encoder
     inputs = Input(shape=(input_dim,))
     x = inputs
     for units in hidden_layers:
         x = Dense(units, activation='relu')(x)
     latent_space = Dense(latent_dim, activation='linear', name="latent_space")(x)
     
-    # Decoder
     x = latent_space
     for units in reversed(hidden_layers):
         x = Dense(units, activation='relu')(x)
@@ -95,7 +90,32 @@ def build_autoencoder(hidden_layers, latent_dim, learning_rate=0.001):
     return autoencoder, encoder, decoder
 
 # ==========================================
-# 3. GRID SEARCH GENERAL CON MONITOREO EFICIENTE
+# 3. ANIMACIÓN DE PROGRESO (CALLBACK)
+# ==========================================
+class ProgressCallback(tf.keras.callbacks.Callback):
+    """
+    Se enchufa a Keras para mostrar una animación y las épocas 
+    en tiempo real sin inundar la consola de texto.
+    """
+    def __init__(self, current_step, total_steps, info_str, total_epochs):
+        super().__init__()
+        self.current_step = current_step
+        self.total_steps = total_steps
+        self.info_str = info_str
+        self.total_epochs = total_epochs
+        # Ruedita de carga estilo Braille
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']) 
+
+    def on_epoch_end(self, epoch, logs=None):
+        # Actualizamos la consola cada 15 épocas para que el giro sea fluido
+        if epoch % 15 == 0 or epoch == self.total_epochs - 1:
+            spin = next(self.spinner)
+            # Imprime en la misma línea sobrescribiendo la anterior (\r)
+            sys.stdout.write(f"\r {spin} Entrenando [{self.current_step}/{self.total_steps}] -> {self.info_str} | Época: {epoch+1}/{self.total_epochs}   ")
+            sys.stdout.flush()
+
+# ==========================================
+# 4. GRID SEARCH GENERAL CON MONITOREO EFICIENTE
 # ==========================================
 best_loss = float('inf')
 best_params = None
@@ -112,22 +132,21 @@ print(f"\n--- Iniciando Grid Search ({total_combinaciones} combinaciones) ---")
 contador = 0
 for lat_dim, arch, lr, ep in itertools.product(latent_dims, arch_configs, lr_configs, epochs_configs):
     contador += 1
-    
-    # Progreso interactivo en consola (con flush para evitar bugs visuales)
-    sys.stdout.write(f"\rProcesando combinación [{contador}/{total_combinaciones}] -> Dim:{lat_dim} | Arch:{arch} | LR:{lr} | Ep:{ep}      ")
-    sys.stdout.flush()
-    
-    param_str = f"Dim:{lat_dim} | Arch:{arch} | LR:{lr} | Ep:{ep}"
+    param_str = f"Dim:{lat_dim} | Arch:{arch} | LR:{lr}"
     
     ae, enc, dec = build_autoencoder(arch, latent_dim=lat_dim, learning_rate=lr)
-    history = ae.fit(X_train, X_train, epochs=ep, batch_size=batch_size, verbose=0)
+    
+    # Instanciamos nuestra animación para este modelo específico
+    spinner_cb = ProgressCallback(contador, total_combinaciones, param_str, ep)
+    
+    # Entrenamos agregando el callback
+    history = ae.fit(X_train, X_train, epochs=ep, batch_size=batch_size, verbose=0, callbacks=[spinner_cb])
     final_loss = history.history['loss'][-1]
     
-    # Prevenir NaN si el LR hizo divergir la red
     if np.isnan(final_loss):
         final_loss = 1.0
         
-    history_dict[param_str] = history.history['loss']
+    history_dict[f"{param_str} | Ep:{ep}"] = history.history['loss']
     registro_metricas.append({
         'latent_dim': lat_dim,
         'arch': str(arch),
@@ -136,21 +155,22 @@ for lat_dim, arch, lr, ep in itertools.product(latent_dims, arch_configs, lr_con
         'loss': final_loss
     })
     
-    # Evaluar si es el mejor absoluto
     if final_loss < best_loss:
         best_loss = final_loss
         best_params = {'latent_dim': lat_dim, 'arch': arch, 'lr': lr, 'epochs': ep}
         best_models = (ae, enc, dec)
         
-    # Evaluar si es el mejor modelo específicamente 2D (para gráficos espaciales)
     if lat_dim == 2 and final_loss < best_2d_loss:
         best_2d_loss = final_loss
         best_2d_models = (ae, enc, dec)
         
-    # Liberar la memoria RAM y Caché de Gráficos de TF
     tf.keras.backend.clear_session()
 
-print(f"\n\n--- ¡VALORES ÓPTIMOS ENCONTRADOS! ---")
+# Limpiar la última línea del spinner al terminar
+sys.stdout.write("\r" + " " * 100 + "\r")
+sys.stdout.flush()
+
+print(f"\n--- ¡VALORES ÓPTIMOS ENCONTRADOS! ---")
 print(f"-> Espacio Latente: {best_params['latent_dim']}D")
 print(f"-> Capas Ocultas: {best_params['arch']}")
 print(f"-> Learning Rate: {best_params['lr']}")
@@ -160,7 +180,7 @@ print(f"-> Pérdida Mínima Absoluta (MSE): {best_loss:.5f}\n")
 autoencoder_opt, encoder_opt, decoder_opt = best_models
 
 # ==========================================
-# 4. EXPORTACIÓN DE GRÁFICOS
+# 5. EXPORTACIÓN DE GRÁFICOS
 # ==========================================
 print("Generando archivos de gráficos...")
 
@@ -183,7 +203,6 @@ plt.savefig("1_comparativa_hiperparametros.png", dpi=300)
 plt.close()
 
 # --- Gráfico 2: Dispersión Espacio Latente 2D ---
-# Usamos best_2d_models para asegurar que siempre haya una gráfica 2D viable
 _, encoder_2d, _ = best_2d_models
 latent_points = encoder_2d.predict(X_train, verbose=0)
 plt.figure(figsize=(8, 6))
@@ -219,7 +238,7 @@ dae.fit(X_train_ruido, X_train, epochs=best_params['epochs'], batch_size=batch_s
 niveles_ruido = [0.10, 0.25, 0.50]
 fig, axes = plt.subplots(len(niveles_ruido), 3, figsize=(9, 9))
 for idx, p in enumerate(niveles_ruido):
-    ent_r = np.copy(X_train[1:2]) # Probamos con el caracter índice 1
+    ent_r = np.copy(X_train[1:2])
     masc_r = np.random.rand(*ent_r.shape) < p
     ent_r[masc_r] = 1 - ent_r[masc_r]
     pred = np.round(dae.predict(ent_r, verbose=0))
@@ -237,7 +256,7 @@ plt.savefig("4_resultado_denoising.png", dpi=300)
 plt.close()
 
 # ==========================================
-# 5. GRÁFICOS COMPARATIVOS INDEPENDIENTES
+# 6. GRÁFICOS COMPARATIVOS INDEPENDIENTES
 # ==========================================
 
 # --- Gráfico 5: Comparativa de ÉPOCAS ---
