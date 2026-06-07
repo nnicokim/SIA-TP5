@@ -119,19 +119,42 @@ class DynamicNumPyAutoencoder:
 # WRAPPERS "ESPEJO" PARA PASAR DESAPERCEBIDO ANTE EL SCRIPT ORIGINAL
 # =====================================================================
 class KerasHistoryMimic:
-    def __init__(self, losses): self.history = {'loss': losses}
+    def __init__(self, losses): 
+        self.history = {'loss': losses}
 
 class AutoencoderWrapper:
-    def __init__(self, core): self.core = core
-    def fit(self, X, y, epochs=1, batch_size=None, verbose=0):
-        losses = [self.core.train_step(X) for _ in range(epochs)]
+    def __init__(self, core): 
+        self.core = core
+        
+    def fit(self, X, y, epochs=1, batch_size=None, verbose=0, callbacks=None):
+        losses = []
+        for epoch in range(epochs):
+            # Ejecuta el paso de entrenamiento en NumPy
+            loss = self.core.train_step(X)
+            losses.append(loss)
+            
+            # Si le pasaste tu ProgressCallback, lo dispara al final de la época
+            if callbacks:
+                for callback in callbacks:
+                    if hasattr(callback, 'on_epoch_end'):
+                        callback.on_epoch_end(epoch, logs={'loss': loss})
+                        
+        # Imprime un salto de línea al final del entrenamiento para que no se pisen los textos en consola
+        print() 
         return KerasHistoryMimic(losses)
+
+    # <<-- AGREGADO CLAVE: Para poder hacer la reconstrucción directa desde el autoencoder completo
     def predict(self, X, verbose=0):
-        return self.core._forward_decoder(self.core._forward_encoder(X)[0])[0]
+        latent, _ = self.core._forward_encoder(X)
+        output, _ = self.core._forward_decoder(latent)
+        return output
 
 class SubModelWrapper:
-    def __init__(self, predict_fn): self.predict_fn = predict_fn
-    def predict(self, X, verbose=0): return self.predict_fn(X)
+    def __init__(self, predict_fn): 
+        self.predict_fn = predict_fn
+        
+    def predict(self, X, verbose=0): 
+        return self.predict_fn(X)
 
 # =====================================================================
 # FUNCTION REEMPLAZO (TU NUEVA FUNCIÓN GANADORA)
