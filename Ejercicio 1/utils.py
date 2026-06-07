@@ -1,10 +1,8 @@
 import sys
 import itertools
-import tensorflow as tf
 
-class ProgressCallback(tf.keras.callbacks.Callback):
+class ProgressCallback:
     def __init__(self, current_step, total_steps, info_str, total_epochs):
-        super().__init__()
         self.current_step = current_step
         self.total_steps = total_steps
         self.info_str = info_str
