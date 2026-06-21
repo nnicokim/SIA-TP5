@@ -208,8 +208,12 @@ class SubModelWrapper:
 # =====================================================================
 # FUNCIÓN DE CONSTRUCCIÓN COMPATIBLE
 # =====================================================================
-def build_vae(input_dim, hidden_layers, latent_dim, learning_rate=0.001):
-    core_model = DynamicNumPyVAE(input_dim, hidden_layers, latent_dim, learning_rate)
+def build_vae(input_dim, hidden_layers, latent_dim, learning_rate=0.001, use_cuda=False):
+    if use_cuda:
+        from models_cuda_vae import DynamicCUDAVAE
+        core_model = DynamicCUDAVAE(input_dim, hidden_layers, latent_dim, learning_rate)
+    else:
+        core_model = DynamicNumPyVAE(input_dim, hidden_layers, latent_dim, learning_rate)
     
     vae = VAEWrapper(core_model)
     # El encoder de Keras devuelve una lista: [z_mean, z_log_var, z]

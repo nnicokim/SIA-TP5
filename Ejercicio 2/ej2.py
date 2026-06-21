@@ -9,9 +9,10 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 warnings.filterwarnings('ignore')
 import logging
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
-import tensorflow as tf
+
+
+import time
 
 sys.path.append(os.path.abspath('../Ejercicio 1'))
 from utils import ProgressCallback
@@ -21,8 +22,18 @@ from data_loader_vae import cargar_datos_kanji
 from models_vae import build_vae
 
 def main():
+    start_time = time.time()
     print("--- Iniciando Grid Search Dinámico de VAE (Kanjis) ---")
-    latent_dims, arch_configs, lr_configs, epochs_configs, batch_size = load_config_vae()
+    
+    latent_dims, arch_configs, lr_configs, epochs_configs, batch_size, use_cuda, seed = load_config_vae()
+
+    # Semilla fija (configurable por SEED en .env) -> resultados reproducibles
+    # corrida a corrida: misma init de pesos y mismo ruido de reparametrizacion.
+    np.random.seed(seed)
+    print(f">>> Semilla del RNG fijada en {seed} (reproducible). <<<")
+
+    if use_cuda:
+        print(">>> AVISO: Usando backend de CUDA activado desde el entorno. <<<")
     
     X_train = cargar_datos_kanji("symbol.h")
     input_dim = X_train.shape[1]
@@ -41,7 +52,7 @@ def main():
     print("\n[1/4] Testeando Arquitecturas (con LR base de 0.001)...")
     plt.figure(figsize=(10, 6))
     for i, arch in enumerate(arch_configs):
-        vae, _, _ = build_vae(input_dim, arch, dim_fija, learning_rate=0.001)
+        vae, _, _ = build_vae(input_dim, arch, dim_fija, learning_rate=0.001, use_cuda=use_cuda)
         spinner = ProgressCallback(len(arch_configs), i+1, f"Arch {arch}", epocas_test)
         
         hist = vae.fit(X_train, epochs=epocas_test, batch_size=batch_size, verbose=0, callbacks=[spinner])
@@ -69,7 +80,7 @@ def main():
     print(f"\n[2/4] Testeando Learning Rates sobre la arquitectura {mejor_arch}...")
     plt.figure(figsize=(10, 6))
     for i, lr in enumerate(lr_configs):
-        vae, _, _ = build_vae(input_dim, mejor_arch, dim_fija, lr)
+        vae, _, _ = build_vae(input_dim, mejor_arch, dim_fija, lr, use_cuda=use_cuda)
         spinner = ProgressCallback(len(lr_configs), i+1, f"LR {lr}", epocas_test)
         
         hist = vae.fit(X_train, epochs=epocas_test, batch_size=batch_size, verbose=0, callbacks=[spinner])
@@ -90,7 +101,12 @@ def main():
     plt.savefig("grafico_2_learning_rates.png", dpi=300)
     plt.close()
 
+    if mejor_lr is None:
+        print("\n [WARNING] Todos los LRs testeados divergieron (Loss=NaN). Usando el primero por defecto.")
+        mejor_lr = lr_configs[0]
+
     print(f"\n >>> Learning Rate Óptimo Encontrado: {mejor_lr} (Loss: {mejor_loss_lr:.2f})")
+
 
     # ==========================================================
     # TEST 3: ENTRENAMIENTO FINAL CON HIPERPARÁMETROS ÓPTIMOS
@@ -100,7 +116,7 @@ def main():
     print(f"      -> Usando Arquitectura: {mejor_arch}")
     print(f"      -> Usando Learning Rate: {mejor_lr}")
     
-    modelo_final, encoder, decoder = build_vae(input_dim, mejor_arch, dim_fija, mejor_lr)
+    modelo_final, encoder, decoder = build_vae(input_dim, mejor_arch, dim_fija, mejor_lr, use_cuda=use_cuda)
     spinner_final = ProgressCallback(1, 1, "Modelo Final", max_epocas)
     
     hist_final = modelo_final.fit(X_train, epochs=max_epocas, batch_size=batch_size, verbose=0, callbacks=[spinner_final])
@@ -161,6 +177,9 @@ def main():
     plt.savefig("consigna_c_kanjis_generados.png", dpi=300)
     plt.close()
     
+    
+    end_time = time.time()
+    print(f"\n[TIME] El proceso completo tomó {end_time - start_time:.2f} segundos.")
     print("\n¡Proceso Completado Exitosamente!")
 
 if __name__ == "__main__":
