@@ -4,7 +4,7 @@ import os
 import ast
 import json
 from dotenv import load_dotenv
-
+import matplotlib.pyplot as plt
 from data import get_dataset
 from encoder import VariationalEncoder
 from decoder import VariationalDecoder
@@ -27,7 +27,7 @@ def main():
     
     mejor_loss = float('inf')
     mejores_hiperparametros = None
-    
+    mejor_decoder = None
     # NUEVO: Lista para almacenar el historial de todas las pruebas
     historial_resultados = []
     
@@ -73,6 +73,7 @@ def main():
 
                         if loss < mejor_loss:
                             mejor_loss = loss
+                            mejor_decoder = decoder
                             mejores_hiperparametros = {
                                 'arch': arch, 
                                 'lr': lr, 
@@ -97,6 +98,38 @@ def main():
     print(f"Mejor Lambda (KL)  : {mejores_hiperparametros['lambda']}")
     print(f"MENOR LOSS OBTENIDA: {mejor_loss:.4f}")
     print("="*50)
+    
+    def generar_kanji_aleatorio(decoder, latent_dim):
+        """
+        Genera y grafica un Kanji nuevo a partir de ruido aleatorio.
+        """
+        # 1. Instanciamos el generador moderno de NumPy
+        # Acá NO le pasamos semilla porque justamente queremos que invente algo nuevo cada vez
+        rng = np.random.default_rng()
+        
+        # 2. Muestreamos el punto aleatorio con standard_normal y doble paréntesis
+        z_random = rng.standard_normal((1, latent_dim))
+        
+        x_generado, _ = decoder.forward(z_random)
+        imagen = x_generado.reshape(10, 10)
+        imagen_binaria = (imagen > 0.5).astype(float)
+        
+        # 3. Cambiamos 'fig' por '_'
+        _, axes = plt.subplots(1, 2, figsize=(8, 4))
+        
+        axes[0].imshow(imagen, cmap='gray', vmin=0, vmax=1)
+        axes[0].set_title("Kanji en crudo (Probabilidades)")
+        axes[0].axis('off')
+        
+        axes[1].imshow(imagen_binaria, cmap='gray', vmin=0, vmax=1)
+        axes[1].set_title("Kanji binarizado (Tinta)")
+        axes[1].axis('off')
+        
+        plt.suptitle("¡Kanji Generado por la IA!")
+        plt.show()
+        
+    print("\nGenerando un Kanji completamente nuevo...")
+    generar_kanji_aleatorio(mejor_decoder, mejores_hiperparametros['latent_dim'])
 
 if __name__ == "__main__":
     main()
