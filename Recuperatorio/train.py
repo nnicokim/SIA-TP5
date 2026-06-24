@@ -126,7 +126,7 @@ def main():
         axes[1].axis('off')
         
         plt.suptitle("¡Kanji Generado por la IA!")
-        plt.show()
+        plt.savefig("kanji_generado.png")
         
     print("\nGenerando un Kanji completamente nuevo...")
     generar_kanji_aleatorio(mejor_decoder, mejores_hiperparametros['latent_dim'])
