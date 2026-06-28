@@ -1,0 +1,18 @@
+{
+  "arch": [
+    64,
+    32,
+    16
+  ],
+  "lr": 0.01,
+  "beta": 0.01,
+  "latent_dim": 2,
+  "seed": 42,
+  "epochs_converged": 794,
+  "loss_total": 1.8238344292034423,
+  "loss_recon": 0.14019904865452473,
+  "loss_kl": 168.36353805489173,
+  "recon_error_medio": 0.39022332901383583,
+  "beta_colapso": 1.0,
+  "z_range": 3.743082763515535
+}

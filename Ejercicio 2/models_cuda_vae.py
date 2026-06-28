@@ -13,11 +13,13 @@ except ImportError as e:
     CUDA_AVAILABLE = False
 
 class DynamicCUDAVAE:
-    def __init__(self, input_dim, hidden_layers, latent_dim, learning_rate=0.001):
+    def __init__(self, input_dim, hidden_layers, latent_dim, learning_rate=0.001, kl_weight=0.01):
         if not CUDA_AVAILABLE:
             raise RuntimeError("CUDA backend not available. Please compile libbackend.so in cuda_backend/")
-            
+
         self.lr = learning_rate
+        # Peso beta de la KL (parametrizable; antes hardcodeado en 0.01)
+        self.kl_weight = kl_weight
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.hidden_layers = hidden_layers
@@ -203,7 +205,7 @@ class DynamicCUDAVAE:
         
         # Losses
         bce_loss, kl_loss = compute_loss(self.X_gpu, output, self.z_mean, self.z_log_var, self.latent_dim)
-        total_loss = bce_loss + 0.01 * kl_loss
+        total_loss = bce_loss + self.kl_weight * kl_loss
         
         # --- 2. BACKWARD PASS ---
         # Salida del Decoder (BCE + Sigmoid combinados)
@@ -235,7 +237,7 @@ class DynamicCUDAVAE:
                 matmul_T2(dz, self.dec_weights[i], self.da_z)
                 
         # Latent Backward
-        kl_grad(self.z_mean, self.z_log_var, self.epsilon, self.da_z, self.d_z_mean, self.d_z_log_var, 0.01)
+        kl_grad(self.z_mean, self.z_log_var, self.epsilon, self.da_z, self.d_z_mean, self.d_z_log_var, self.kl_weight)
         
         # dw_mean = a_enc_last.T @ d_z_mean
         matmul_T1(a_enc_last, self.d_z_mean, self.dW_mean)

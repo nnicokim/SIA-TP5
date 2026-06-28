@@ -4,9 +4,12 @@ import numpy as np
 # MOTOR INTERNO: VARIATIONAL AUTOENCODER (VAE) EN NUMPY PURO
 # =====================================================================
 class DynamicNumPyVAE:
-    def __init__(self, input_dim, hidden_layers, latent_dim, learning_rate=0.001):
+    def __init__(self, input_dim, hidden_layers, latent_dim, learning_rate=0.001, kl_weight=0.01):
         self.lr = learning_rate
         self.latent_dim = latent_dim
+        # Peso beta de la divergencia KL (antes hardcodeado en 0.01).
+        # Es el hiperparametro que controla el posterior collapse: beta alto -> KL -> 0.
+        self.kl_weight = kl_weight
         
         # Capas ocultas del Encoder y Decoder
         enc_sizes = [input_dim] + list(hidden_layers)
@@ -94,8 +97,8 @@ class DynamicNumPyVAE:
         kl_elementwise = -0.5 * (1.0 + z_log_var - np.square(z_mean) - np.exp(z_log_var))
         kl_loss = np.sum(kl_elementwise)
         
-        total_loss = reconstruction_loss + (0.01 * kl_loss)
-        
+        total_loss = reconstruction_loss + (self.kl_weight * kl_loss)
+
         # --- 2. BACKWARD PASS (Gradientes del VAE) ---
         input_dim = X.shape[1]
         # Gradiente directo de la combinación BCE + Salida Sigmoid (dividido la dimensión)
@@ -115,7 +118,7 @@ class DynamicNumPyVAE:
         da_z = da
         
         # Gradientes hacia las ramas distribucionales (Combinando KL y el paso del Decoder)
-        beta = 0.01
+        beta = self.kl_weight
         d_z_mean = beta * z_mean + da_z
         d_z_log_var = 0.5 * beta * (np.exp(z_log_var) - 1.0) + da_z * (0.5 * np.exp(0.5 * z_log_var) * epsilon)
         
@@ -208,12 +211,12 @@ class SubModelWrapper:
 # =====================================================================
 # FUNCIÓN DE CONSTRUCCIÓN COMPATIBLE
 # =====================================================================
-def build_vae(input_dim, hidden_layers, latent_dim, learning_rate=0.001, use_cuda=False):
+def build_vae(input_dim, hidden_layers, latent_dim, learning_rate=0.001, use_cuda=False, kl_weight=0.01):
     if use_cuda:
         from models_cuda_vae import DynamicCUDAVAE
-        core_model = DynamicCUDAVAE(input_dim, hidden_layers, latent_dim, learning_rate)
+        core_model = DynamicCUDAVAE(input_dim, hidden_layers, latent_dim, learning_rate, kl_weight)
     else:
-        core_model = DynamicNumPyVAE(input_dim, hidden_layers, latent_dim, learning_rate)
+        core_model = DynamicNumPyVAE(input_dim, hidden_layers, latent_dim, learning_rate, kl_weight)
     
     vae = VAEWrapper(core_model)
     # El encoder de Keras devuelve una lista: [z_mean, z_log_var, z]
